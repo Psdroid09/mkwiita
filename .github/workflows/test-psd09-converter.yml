@@ -1,0 +1,29 @@
+name: Check PSD09 disc converter
+
+on:
+  push:
+    branches: [opt/psd09-framebuffer-gpu-profile]
+    paths:
+      - ".github/workflows/test-psd09-converter.yml"
+      - "tools/vita/psd09_wizard.py"
+      - "tests/test_psd09_wizard.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check Python syntax
+        run: python -m compileall -q tools/vita/psd09_wizard.py
+      - name: Test ISO, WBFS, NKit and region preflight
+        run: python -m unittest discover -s tests -p 'test_psd09_wizard.py' -v
