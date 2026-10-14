@@ -48,7 +48,7 @@ yourself, on your own computer, from your own Mario Kart Wii disc.
 ## Quick start
 
 1. **Get the VPK:** download `mkw.vpk` from the [latest release](https://github.com/boomannotjeff/mkwiita/releases/latest).
-2. **Build the game files** from your disc: double-click **`Build Game Files.bat`**, drag your disc image into the window and press Enter. The first build takes 30–60 minutes.
+2. **Build the game files** from your disc (Windows): double-click **`Build Game Files.bat`**. The PSD09 wizard opens an ISO/WBFS file picker, checks the USA disc ID (`RMCE01`), checks free space and required tools, installs project dependencies, and keeps CMD open on errors. The first build takes roughly 30–60 minutes or longer. You can also drag your ISO onto the `.bat` file. See [Spanish wizard instructions](docs/PSD09_CONVERSOR.md).
    Use the source code of the same release as your VPK (the release page has it as a zip), so the game files match the program.
 
    *Building the VPK yourself?* Use **`Build MKW Vita.bat`** instead: it needs VitaSDK and makes both the game files and `build\vita\mkw.vpk`.
