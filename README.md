@@ -48,7 +48,7 @@ yourself, on your own computer, from your own Mario Kart Wii disc.
 ## Quick start
 
 1. **Get the VPK:** download `mkw.vpk` from the [latest release](https://github.com/boomannotjeff/mkwiita/releases/latest).
-2. **Build the game files** from your disc: double-click **`Build Game Files.bat`**, drag your disc image into the window and press Enter. The first build takes 30–60 minutes.
+2. **Build the game files** from your disc (Windows): double-click **`Build Game Files.bat`**. The PSD09 wizard opens an ISO/WBFS file picker, checks the USA disc ID (`RMCE01`), checks free space and required tools, installs project dependencies, and keeps CMD open on errors. The first build takes roughly 30–60 minutes or longer. You can also drag your ISO onto the `.bat` file. See [Spanish wizard instructions](docs/PSD09_CONVERSOR.md).
    Use the source code of the same release as your VPK (the release page has it as a zip), so the game files match the program.
 
    *Building the VPK yourself?* Use **`Build MKW Vita.bat`** instead: it needs VitaSDK and makes both the game files and `build\vita\mkw.vpk`.
@@ -79,7 +79,8 @@ game data. The VPK itself is only the program; it holds no game data.
 - **Black screen after the vitaGL logo:** `libshacccg.suprx` is missing (see above), or the game files aren't in `ux0:data/mkw/`.
 - **Short freezes on the first launch:** shaders compiling. They're saved to `ux0:data/mkw/shaders/` and loaded at start-up after that.
 - **Something looks wrong after an update:** delete `ux0:data/mkw/shaders/` to rebuild the shader cache.
-- **Logs:** `ux0:data/mkw/vita.log` (graphics, frame rate) and `ux0:data/mkw/runtime.log` (game). Attach both when reporting a problem.
+- **Logs:** `ux0:data/mkw/vita.log` (graphics and startup messages) and `ux0:data/mkw/runtime.log` (game). For FPS and detailed GPU timing, create the empty file `ux0:data/mkw/gpu-stats.txt` before launching the game and restart; remove it to disable profiling again. Attach logs when reporting a problem.
+- **PSdroid09 performance changes:** see [performance notes](docs/PSD09_PERFORMANCE.md) for optimizations, limitations, and how to compare builds.
 
 ## How it works
 

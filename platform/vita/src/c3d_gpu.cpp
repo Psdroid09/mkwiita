@@ -48,6 +48,9 @@ constexpr int Scale = 2;
 constexpr int DisplayWidth = 960, DisplayHeight = 544;
 
 bool displayReady = false;
+// Opt-in: normal gameplay avoids profiling syscalls, disk logs and the
+// periodic GPU-wide stall used only to measure GPU tail latency.
+bool gpuProfile = false;
 
 // ---- Textures -------------------------------------------------------------------
 // One mip level converted for GL: ETC1 blocks or RGBA8 rows.
@@ -305,11 +308,13 @@ void bindTexture(int unit, const C3D_Tex* tex) {
 	glBindTexture(GL_TEXTURE_2D, t->gl);
 	boundTexture[unit] = t->gl;
 	if (upload) {
-		const uint64_t start = sceKernelGetProcessTimeWide();
-		if (levels.empty()) { levels = convertTexture(*tex); ++uploadStats.converted; }
+		const uint64_t start = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
+		if (levels.empty()) { levels = convertTexture(*tex); if (gpuProfile) ++uploadStats.converted; }
 		uploadLevels(levels);
-		++uploadStats.uploads;
-		uploadStats.us += sceKernelGetProcessTimeWide() - start;
+		if (gpuProfile) {
+			++uploadStats.uploads;
+			uploadStats.us += sceKernelGetProcessTimeWide() - start;
+		}
 		t->appliedParam = ~0u;
 	}
 	applyParams(*t, *tex);
@@ -611,7 +616,11 @@ struct FrameStats {
 	uint64_t copiedBytes = 0, beginWaitUs = 0, frameUs = 0, lastPresentUs = 0, swapUs = 0, workUs = 0, frameStartUs = 0, glUs = 0, gpuTailUs = 0;
 } stats;
 void bindFramebuffer(GLuint fbo) {
-	if (fbo != boundFramebuffer) { ++stats.targetSwitches; boundFramebuffer = fbo; }
+	// Avoid redundant state changes: vitaGL may treat framebuffer binds as
+	// GXM scene transitions, even when the framebuffer has not changed.
+	if (fbo == boundFramebuffer) return;
+	if (gpuProfile) ++stats.targetSwitches;
+	boundFramebuffer = fbo;
 	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 }
 
@@ -692,8 +701,7 @@ void prepareDraw(uint32_t firstVertex, uint32_t endVertex) {
 			if (auto* copy = static_cast<uint8_t*>(vglAllocFromScratch(to - from))) {
 				std::memcpy(copy, reinterpret_cast<const void*>(from), to - from);
 				base = copy - size_t(firstVertex) * stride;
-				++stats.copies;
-				stats.copiedBytes += to - from;
+				if (gpuProfile) { ++stats.copies; stats.copiedBytes += to - from; }
 			}
 		}
 		vglBufferData(GL_ARRAY_BUFFER, base);
@@ -733,7 +741,11 @@ void collectGarbage() {
 	deadTex.swap(deadTextures); deadFbo.swap(deadFramebuffers); deadRb.swap(deadRenderbuffers);
 	LightLock_Unlock(&textureLock);
 	if (!deadTex.empty()) glDeleteTextures(GLsizei(deadTex.size()), deadTex.data());
-	if (!deadFbo.empty()) glDeleteFramebuffers(GLsizei(deadFbo.size()), deadFbo.data());
+	if (!deadFbo.empty()) {
+		glDeleteFramebuffers(GLsizei(deadFbo.size()), deadFbo.data());
+		// Deleting a bound FBO may implicitly switch the GL binding to zero.
+		boundFramebuffer = ~0u;
+	}
 	if (!deadRb.empty()) glDeleteRenderbuffers(GLsizei(deadRb.size()), deadRb.data());
 }
 
@@ -764,9 +776,9 @@ void present(Target* top) {
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, &quad[0][0]);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, &quad[0][2]);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	const uint64_t swapStart = sceKernelGetProcessTimeWide();
+	const uint64_t swapStart = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
 	vglSwapBuffers(GL_FALSE);
-	stats.swapUs += sceKernelGetProcessTimeWide() - swapStart;
+	if (gpuProfile) stats.swapUs += sceKernelGetProcessTimeWide() - swapStart;
 	invalidateApplied();
 	state.targetDirty = true;
 }
@@ -787,6 +799,7 @@ void initDisplay() {
 	LightLock_Init(&writtenLock);
 	auto marker = [](const char* path) { FILE* f = std::fopen(path, "rb"); if (f) std::fclose(f); return f != nullptr; };
 	gpuTrace = marker("ux0:data/mkw/gpu-trace.txt");
+	gpuProfile = marker("ux0:data/mkw/gpu-stats.txt");
 	gpuSync = marker("ux0:data/mkw/gpu-sync.txt");
 	vglUseExtraMem(GL_FALSE); // LINEAR allocations must stay GPU-mapped
 	vglInitExtended(0, DisplayWidth, DisplayHeight, 16 * 1024 * 1024, SCE_GXM_MULTISAMPLE_NONE);
@@ -849,21 +862,21 @@ void C3D_SetScissor(GPU_SCISSORMODE mode, u32 left, u32 top, u32 right, u32 bott
 }
 void C3D_DrawArrays(GPU_Primitive_t primitive, int first, int size) {
 	if (!state.target) return;
-	const uint64_t start = sceKernelGetProcessTimeWide();
+	const uint64_t start = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
 	prepareDraw(u32(first), u32(first + size));
-	++stats.draws;
+	if (gpuProfile) ++stats.draws;
 	recordDraw(u32(size), false);
 	glDrawArrays(glPrimitive(primitive), first, size);
-	stats.glUs += sceKernelGetProcessTimeWide() - start;
+	if (gpuProfile) stats.glUs += sceKernelGetProcessTimeWide() - start;
 }
 void C3D_DrawElements(GPU_Primitive_t primitive, int count, int type, const void* indices) {
 	if (!state.target || count <= 0) return;
-	const uint64_t start = sceKernelGetProcessTimeWide();
+	const uint64_t start = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
 	const size_t indexBytes = size_t(count) * (type == C3D_UNSIGNED_SHORT ? 2 : 1);
 	const bool indicesWritten = recentlyWritten(uintptr_t(indices), uintptr_t(indices) + indexBytes);
 	const auto range = indexRange(indices, count, type, indicesWritten);
 	prepareDraw(range.first, range.second);
-	++stats.draws;
+	if (gpuProfile) ++stats.draws;
 	recordDraw(u32(count), true, indices, type);
 	const void* drawIndices = indices;
 	if (indicesWritten)
@@ -874,7 +887,7 @@ void C3D_DrawElements(GPU_Primitive_t primitive, int count, int type, const void
 	vglBufferData(GL_ELEMENT_ARRAY_BUFFER, drawIndices);
 	glDrawElements(glPrimitive(primitive), count, type == C3D_UNSIGNED_SHORT ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE, nullptr);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-	stats.glUs += sceKernelGetProcessTimeWide() - start;
+	if (gpuProfile) stats.glUs += sceKernelGetProcessTimeWide() - start;
 }
 
 // ---- Texture combiner -------------------------------------------------------------------
@@ -1106,12 +1119,12 @@ bool C3D_FrameBegin(u8 flags) {
 	// data is copied at the draw instead (noteWritten), so only an explicit
 	// sync request (or the gpu-sync.txt marker) waits.
 	if (gpuSync || (flags & C3D_FRAME_SYNCDRAW)) {
-		const uint64_t start = sceKernelGetProcessTimeWide();
+		const uint64_t start = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
 		glFinish();
-		stats.beginWaitUs += sceKernelGetProcessTimeWide() - start;
+		if (gpuProfile) stats.beginWaitUs += sceKernelGetProcessTimeWide() - start;
 	}
 	collectGarbage();
-	stats.frameStartUs = sceKernelGetProcessTimeWide();
+	stats.frameStartUs = gpuProfile ? sceKernelGetProcessTimeWide() : 0;
 	for (Target* t : targets) t->c3d.used = false;
 	return true;
 }
@@ -1127,41 +1140,45 @@ bool C3D_FrameDrawOn(C3D_RenderTarget* target) {
 void C3D_FrameSplit(u8) {}
 void C3D_FrameEnd(u8) {
 	if (topOutput && topOutput->c3d.used) {
-		if (stats.frameStartUs) stats.workUs += sceKernelGetProcessTimeWide() - stats.frameStartUs;
+		if (gpuProfile && stats.frameStartUs) stats.workUs += sceKernelGetProcessTimeWide() - stats.frameStartUs;
 		present(topOutput);
-		// Frame rate, draws and copies, every 300 presented frames.
-		uint64_t now = sceKernelGetProcessTimeWide();
-		if (stats.frames == 299) {
-			// Once per report: wait for the frame just presented. A long wait
-			// means the GPU, not the draw thread, sets the frame rate.
-			glFinish();
-			const uint64_t finished = sceKernelGetProcessTimeWide();
-			stats.gpuTailUs = finished - now;
-			now = finished;
-		}
-		if (stats.lastPresentUs) {
-			stats.frameUs += now - stats.lastPresentUs;
-			const uint64_t frame = now - stats.lastPresentUs;
-			if (frame > 70000)
-				std::printf("c3dvita: slow frame %.1f ms: %u texture uploads (%u converted while drawing, %.1f ms), %u shader programs (%.1f ms)\n",
-					double(frame) / 1e3, uploadStats.uploads, uploadStats.converted, double(uploadStats.us) / 1e3,
-					c3dvita::programsCreated, double(c3dvita::programUs) / 1e3);
-		}
-		uploadStats = {};
-		c3dvita::programsCreated = 0;
-		c3dvita::programUs = 0;
-		stats.lastPresentUs = now;
-		if (++stats.frames == 300) {
-			std::printf("c3dvita: %.1f fps, %u draws/frame, %u copies/frame (%u KiB), sync wait %.2f ms, draw thread %.2f ms, present %.2f ms\n",
-				stats.frameUs ? 299e6 / double(stats.frameUs) : 0.0, stats.draws / 300, stats.copies / 300,
-				unsigned(stats.copiedBytes / 300 / 1024), double(stats.beginWaitUs) / 300e3, double(stats.workUs) / 300e3,
-				double(stats.swapUs) / 300e3);
-			std::printf("c3dvita:   in draw calls %.2f ms (game work %.2f ms), %u target switches/frame, gpu tail %.2f ms\n",
-				double(stats.glUs) / 300e3, double(stats.workUs > stats.glUs ? stats.workUs - stats.glUs : 0) / 300e3,
-				stats.targetSwitches / 300, double(stats.gpuTailUs) / 1e3);
-			const uint64_t keep = stats.lastPresentUs;
-			stats = {};
-			stats.lastPresentUs = keep;
+		// Only profile if explicitly requested. This also avoids the
+		// forced glFinish() every 300 frames during normal gameplay.
+		if (gpuProfile) {
+			// Frame rate, draws and copies, every 300 presented frames.
+			uint64_t now = sceKernelGetProcessTimeWide();
+			if (stats.frames == 299) {
+				// Once per report: wait for the frame just presented. A long wait
+				// means the GPU, not the draw thread, sets the frame rate.
+				glFinish();
+				const uint64_t finished = sceKernelGetProcessTimeWide();
+				stats.gpuTailUs = finished - now;
+				now = finished;
+			}
+			if (stats.lastPresentUs) {
+				stats.frameUs += now - stats.lastPresentUs;
+				const uint64_t frame = now - stats.lastPresentUs;
+				if (frame > 70000)
+					std::printf("c3dvita: slow frame %.1f ms: %u texture uploads (%u converted while drawing, %.1f ms), %u shader programs (%.1f ms)\n",
+						double(frame) / 1e3, uploadStats.uploads, uploadStats.converted, double(uploadStats.us) / 1e3,
+						c3dvita::programsCreated, double(c3dvita::programUs) / 1e3);
+			}
+			uploadStats = {};
+			c3dvita::programsCreated = 0;
+			c3dvita::programUs = 0;
+			stats.lastPresentUs = now;
+			if (++stats.frames == 300) {
+				std::printf("c3dvita: %.1f fps, %u draws/frame, %u copies/frame (%u KiB), sync wait %.2f ms, draw thread %.2f ms, present %.2f ms\n",
+					stats.frameUs ? 299e6 / double(stats.frameUs) : 0.0, stats.draws / 300, stats.copies / 300,
+					unsigned(stats.copiedBytes / 300 / 1024), double(stats.beginWaitUs) / 300e3, double(stats.workUs) / 300e3,
+					double(stats.swapUs) / 300e3);
+				std::printf("c3dvita:   in draw calls %.2f ms (game work %.2f ms), %u target switches/frame, gpu tail %.2f ms\n",
+					double(stats.glUs) / 300e3, double(stats.workUs > stats.glUs ? stats.workUs - stats.glUs : 0) / 300e3,
+					stats.targetSwitches / 300, double(stats.gpuTailUs) / 1e3);
+				const uint64_t keep = stats.lastPresentUs;
+				stats = {};
+				stats.lastPresentUs = keep;
+			}
 		}
 	}
 	endFrameDraws();

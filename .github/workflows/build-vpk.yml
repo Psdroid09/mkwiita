@@ -1,0 +1,63 @@
+name: Compile experimental MKWiita VPK
+
+on:
+  push:
+    branches:
+      - opt/psd09-framebuffer-gpu-profile
+    paths:
+      - ".github/workflows/build-vpk.yml"
+      - "platform/vita/**"
+      - "src/**"
+      - "CMakeLists.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-vpk:
+    name: VitaSDK compile (no game assets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: vitasdk/vitasdk:2026.08
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare compilation dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git python3 cmake ninja-build
+          echo "VITASDK=${VITASDK}"
+          test -f "${VITASDK}/share/vita.cmake"
+          if [ ! -f "${VITASDK}/arm-vita-eabi/lib/libvitaGL.a" ]; then
+            vdpm pacman -- -S --noconfirm vitaGL zlib libpng
+          fi
+      - name: Restore pinned source dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/bootstrap.py
+      - name: Configure Vita build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/vita -G Ninja -DCMAKE_BUILD_TYPE=Release -DMKW_RELEASE=OFF
+      - name: Compile optimized VPK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/vita --parallel 3
+          test -s build/vita/mkw.vpk
+          sha256sum build/vita/mkw.vpk
+      - name: Upload experimental VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MKWiita-PSD09-experimental-VPK
+          path: build/vita/mkw.vpk
+          if-no-files-found: error
+          retention-days: 14
