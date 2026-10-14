@@ -79,7 +79,8 @@ game data. The VPK itself is only the program; it holds no game data.
 - **Black screen after the vitaGL logo:** `libshacccg.suprx` is missing (see above), or the game files aren't in `ux0:data/mkw/`.
 - **Short freezes on the first launch:** shaders compiling. They're saved to `ux0:data/mkw/shaders/` and loaded at start-up after that.
 - **Something looks wrong after an update:** delete `ux0:data/mkw/shaders/` to rebuild the shader cache.
-- **Logs:** `ux0:data/mkw/vita.log` (graphics, frame rate) and `ux0:data/mkw/runtime.log` (game). Attach both when reporting a problem.
+- **Logs:** `ux0:data/mkw/vita.log` (graphics and startup messages) and `ux0:data/mkw/runtime.log` (game). For FPS and detailed GPU timing, create the empty file `ux0:data/mkw/gpu-stats.txt` before launching the game and restart; remove it to disable profiling again. Attach logs when reporting a problem.
+- **PSdroid09 performance changes:** see [performance notes](docs/PSD09_PERFORMANCE.md) for optimizations, limitations, and how to compare builds.
 
 ## How it works
 
